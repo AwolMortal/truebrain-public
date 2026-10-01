@@ -52,6 +52,7 @@ No network, no accounts, nothing runs outside Obsidian. Everything it records st
 - `node build.js` joins `src/` into `main.js` (no dependencies).
 - `node build.js --vault <path>` also copies the plugin into a vault.
 - `node test/run.js` tests the built plugin against an in-memory stand-in for Obsidian.
+- `node build.js --check` fails if `main.js` is out of date. Full guide: [docs/develop.md](docs/develop.md).
 
 ## Roadmap
 

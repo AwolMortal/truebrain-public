@@ -1,0 +1,21 @@
+# Every push and pull request: the committed main.js must be exactly what the sources build,
+# and the tests must pass against it. No dependencies to install.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: main.js matches the sources
+        run: node build.js --check
+      - name: Tests
+        run: node test/run.js

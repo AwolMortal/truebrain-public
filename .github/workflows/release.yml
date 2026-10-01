@@ -1,0 +1,38 @@
+# Push a tag like 0.1.1 (no "v": Obsidian and BRAT read the tag as the version) and this publishes the
+# GitHub release with the three files a plugin install needs. It refuses unless the tag, manifest.json
+# and versions.json agree, main.js matches the sources, and the tests pass.
+name: Release
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: The tag, manifest.json and versions.json agree
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          node -e '
+            const tag = process.argv[1];
+            const m = require("./manifest.json"), v = require("./versions.json");
+            if (m.version !== tag) { console.log("manifest.json says " + m.version + ", the tag is " + tag); process.exit(1); }
+            if (v[tag] !== m.minAppVersion) { console.log("versions.json needs \"" + tag + "\": \"" + m.minAppVersion + "\""); process.exit(1); }
+            console.log("version " + tag + ", minAppVersion " + m.minAppVersion);
+          ' "$TAG"
+      - name: main.js matches the sources
+        run: node build.js --check
+      - name: Tests
+        run: node test/run.js
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" main.js manifest.json styles.css \
+            --title "TrueBrain Public ${GITHUB_REF_NAME}" --notes-file "docs/releases/${GITHUB_REF_NAME}.md"

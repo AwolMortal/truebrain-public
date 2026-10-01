@@ -1,0 +1,13 @@
+{
+  "name": "truebrain-public",
+  "version": "0.1.1",
+  "description": "TrueBrain Public: an Obsidian plugin that keeps a second brain in shape.",
+  "private": true,
+  "license": "MIT",
+  "author": "Aaron Gates",
+  "scripts": {
+    "build": "node build.js",
+    "check": "node build.js --check",
+    "test": "node build.js && node test/run.js"
+  }
+}
