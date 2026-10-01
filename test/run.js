@@ -146,6 +146,68 @@ const lastModal = () => M.Modal.opened[M.Modal.opened.length - 1];
     ok(idx && idx.split('\n')[0].startsWith('path\tname') && idx.includes('A.md\tA\t\thas one'), 'index: one tab-separated line per note');
   }
 
+  // ---- 0.1.1 fixes: each test below fails on 0.1.0
+  // a second proposals run on the same day reuses the note, does no work, and says so (0.1.0 said "-1 proposals")
+  {
+    const { p } = await newPlugin({ 'A.md': '---\nsummary: a\n---\nhi' });
+    await p.runProposals(true);
+    let heatCalls = 0; const real = p.getHeat.bind(p); p.getHeat = async (f) => { heatCalls++; return real(f); };
+    const before = M.notices.length;
+    await p.runProposals(true);
+    const said = M.notices.slice(before).join(' | ');
+    ok(/already made/.test(said) && !/-1/.test(said), 'proposals: a second run the same day says the note already exists, not "-1 proposals"');
+    ok(heatCalls === 0, 'proposals: a second run the same day skips the heat pass');
+  }
+  // a max of 0 turns a proposal section off
+  {
+    const { p, app } = await newPlugin({ 'Craft/Room Notes.md': '---\nsummary: notes\n---\nSee the game level one plan too.',
+      'Projects/Game Level One Plan.md': '---\nsummary: a project\n---\nPlan.' }, { maxAdd: 0 });
+    await p.runProposals(false);
+    const note = app.vault.getMarkdownFiles().find((f) => f.basename.startsWith('TrueBrain Proposals'));
+    ok(/## Add links\n\(nothing this week\)/.test(await app.vault.read(note)), 'proposals: maxAdd 0 proposes no links');
+  }
+  // the first AI index after startup carries real heat (0.1.0 wrote heat 0 until heat had been computed once)
+  {
+    const { p, app } = await newPlugin({ 'A.md': '---\nsummary: a\n---\nhi', 'B.md': '---\nsummary: b\n---\nho' });
+    const t = C.isoStamp(new Date(Date.now() - 3600000));
+    app.vault.adapter.data.set('.truebrain/usage.jsonl', [1, 2, 3].map(() => JSON.stringify({ t, note: 'A.md', tool: 'open', session: 's' })).join('\n') + '\n');
+    p.heat = null;
+    await p.writeIndex(false);
+    const row = app.vault.adapter.data.get('.truebrain/index.tsv').split('\n').find((l) => l.startsWith('A.md\t'));
+    ok(row && Number(row.split('\t')[5]) > 0, 'index: the first index after startup has real heat');
+  }
+  // unloading stops pending timers, and nothing is written after (0.1.0 left them armed)
+  {
+    const { p, app } = await newPlugin({ 'A.md': '---\nsummary: a\n---\nhi' });
+    const realSet = global.window.setTimeout, realClear = global.window.clearTimeout, cleared = new Set();
+    global.window.setTimeout = (fn, ms) => realSet(fn, 3600000); global.window.clearTimeout = (id) => { cleared.add(id); realClear(id); };
+    try {
+      p.queueIndex(); p.scheduleMarks(); const ids = [p._ix, p._mt].filter(Boolean);
+      p.onunload();
+      ok(ids.length === 2 && ids.every((id) => cleared.has(id)), 'unload: pending index and marks timers are cleared');
+      app.vault.adapter.data.delete('.truebrain/index.tsv');
+      await p.writeIndex(false);
+      ok(!app.vault.adapter.data.has('.truebrain/index.tsv'), 'unload: no index is written after unload');
+    } finally { global.window.setTimeout = realSet; global.window.clearTimeout = realClear; }
+  }
+  // the usage log is trimmed to what heat reads, and left alone when already trim
+  {
+    const old = C.isoStamp(new Date(Date.now() - 500 * C.DAY)), recent = C.isoStamp(new Date(Date.now() - C.DAY));
+    const text = [JSON.stringify({ t: old, note: 'A.md' }), 'not json', JSON.stringify({ t: recent, note: 'B.md' }), ''].join('\n');
+    const r = C.compactEvents(text, Date.now() - 400 * C.DAY);
+    ok(r.kept === 1 && r.dropped === 2 && r.text.includes('B.md') && !r.text.includes('A.md'), 'usage: old events and bad lines are dropped, recent ones kept');
+    const { p, app } = await newPlugin({ 'B.md': '---\nsummary: b\n---\nhi' });
+    app.vault.adapter.data.set('.truebrain/usage.jsonl', text);
+    ok((await p.compactUsage()).dropped === 2 && app.vault.adapter.data.get('.truebrain/usage.jsonl') === r.text, 'usage: the plugin rewrites the log trimmed');
+    let writes = 0; const w = p.writeData.bind(p); p.writeData = async (n, t2) => { writes++; return w(n, t2); };
+    ok((await p.compactUsage()).dropped === 0 && writes === 0, 'usage: an already trim log is not rewritten');
+  }
+  // a restored file beside a taken name keeps a sane name, with or without an extension
+  ok(C.besidePath('a/b.md') === 'a/b (unpacked).md', 'unpack: beside name keeps the extension');
+  ok(C.besidePath('a/Makefile') === 'a/Makefile (unpacked)', 'unpack: a file with no extension is not cut (0.1.0 cut its last character)');
+  ok(C.besidePath('a.b/c') === 'a.b/c (unpacked)', 'unpack: a dot in a folder name is not an extension');
+  ok(C.besidePath('a/.hidden') === 'a/.hidden (unpacked)', 'unpack: a leading-dot name is not an extension');
+
   console.log(fail ? 'TESTS FAIL ' + fail + ' of ' + (pass + fail) : 'TESTS PASS ' + pass + '/' + pass);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log('TESTS CRASH: ' + (e.stack || e)); process.exit(1); });

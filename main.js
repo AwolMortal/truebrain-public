@@ -29,14 +29,16 @@ function rankNotes(entries, query, opts) {
   opts = opts || {};
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return [];
+  // one pattern per word, built once per query rather than once per note
+  const starts = words.map((w) => new RegExp('(^|[^a-z0-9])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const hits = [];
   for (const e of entries) {
     if (opts.type && e.type !== opts.type) continue;
     const nm = e.name.toLowerCase(), sm = (e.summary || '').toLowerCase(), tg = (e.tags || '').toLowerCase(), pa = e.path.toLowerCase();
     let score = 0, ok = true;
-    for (const w of words) {
-      const re = new RegExp('(^|[^a-z0-9])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const s = (re.test(nm) ? 6 : 0) + (sm.includes(w) ? 3 : 0) + (tg.includes(w) ? 2 : 0) + (pa.includes(w) ? 1 : 0);
+    for (let wi = 0; wi < words.length; wi++) {
+      const w = words[wi];
+      const s = (starts[wi].test(nm) ? 6 : 0) + (sm.includes(w) ? 3 : 0) + (tg.includes(w) ? 2 : 0) + (pa.includes(w) ? 1 : 0);
       if (!s) { ok = false; break; }
       score += s;
     }
@@ -90,9 +92,9 @@ function computeHeat(events, notes, links, now, opts) {
     out.push({ note: n.path, score, reads30: r, edited30: edited, back: n.back || 0, out: n.out || 0, idle, cold });
   }
   out.sort((a, b) => b.score - a.score || a.note.localeCompare(b.note));
-  const never = [];
+  const never = [], byPath = new Map(notes.map((n) => [n.path, n]));     // a lookup, not a scan per linking note
   for (const [src, dsts] of Object.entries(links || {})) {
-    const meta = notes.find((n) => n.path === src);
+    const meta = byPath.get(src);
     if (!meta || meta.hub || (reads.get(src) || 0) < opts.readsForNever) continue;
     for (const d of dsts) if (!follows.has(src + '\u0000' + d)) never.push({ a: src, b: d, reads: reads.get(src) });
   }
@@ -112,6 +114,27 @@ function parseEvents(text, sinceMs) {
     try { const e = JSON.parse(line); if (e && e.note && e.t && (!sinceMs || Date.parse(e.t) >= sinceMs)) out.push(e); } catch (err) { /* skip bad line */ }
   }
   return out;
+}
+
+/* the usage log keeps only what heat can still read: events since sinceMs, valid lines only.
+ * -> {text, kept, dropped}; dropped 0 means the log is already compact and need not be rewritten */
+function compactEvents(text, sinceMs) {
+  const keep = []; let dropped = 0;
+  for (const line of String(text || '').split('\n')) {
+    if (!line.trim()) continue;
+    let e = null; try { e = JSON.parse(line); } catch (err) { /* a bad line is dropped */ }
+    const t = e && e.note && e.t ? Date.parse(e.t) : NaN;
+    if (isFinite(t) && t >= sinceMs) keep.push(line); else dropped++;
+  }
+  return { text: keep.length ? keep.join('\n') + '\n' : '', kept: keep.length, dropped };
+}
+
+/* where a restored file goes when its own path is taken: "a/b.md" -> "a/b (unpacked).md",
+ * "a/Makefile" -> "a/Makefile (unpacked)", "a.b/c" -> "a.b/c (unpacked)" (a dot in a folder is not an extension) */
+function besidePath(path, tag) {
+  tag = tag || ' (unpacked)';
+  const slash = path.lastIndexOf('/'), dot = path.lastIndexOf('.');
+  return dot > slash + 1 ? path.slice(0, dot) + tag + path.slice(dot) : path + tag;
 }
 
 // ---------------------------------------------------------------- text helpers for proposals
@@ -191,7 +214,7 @@ const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i
 
 module.exports = {
   DAY, baseName, folderOf, csv, inFolders, isoDate, isoStamp, hash, safeName, fmString,
-  rankNotes, computeHeat, parseEvents, blankPlain, findMention, parseProposalLines, PROPOSAL_LINE,
+  rankNotes, computeHeat, parseEvents, compactEvents, besidePath, blankPlain, findMention, parseProposalLines, PROPOSAL_LINE,
   defang, buildPackText, parsePackText, gzip, gunzip, sameBytes, ZW,
 };
 
@@ -329,9 +352,7 @@ async function unpackFlow(P, packFile) {
   let m; try { m = await readManifest(P, packFile); } catch (e) { return new Notice('TrueBrain: ' + e.message); }
   const V = P.app.vault, man = m.manifest;
   const targets = man.files.map((f) => {
-    let path = f.path;
-    if (V.getAbstractFileByPath(path)) { const dot = path.lastIndexOf('.'); path = path.slice(0, dot) + ' (unpacked)' + path.slice(dot); }
-    return { from: f.path, to: path };
+    return { from: f.path, to: V.getAbstractFileByPath(f.path) ? C.besidePath(f.path) : f.path };
   });
   let found = 0;
   for (const e of man.inbound) { const f = V.getAbstractFileByPath(e.file); if (f instanceof TFile && (await V.cachedRead(f)).includes(e.replacement)) found++; }
@@ -399,7 +420,12 @@ async function harvest(P) {
 
 async function makeProposals(P) {
   const S = P.settings, MC = P.app.metadataCache, RL = MC.resolvedLinks;
-  const rejected = await harvest(P), heat = await P.getHeat(true);
+  const rejected = await harvest(P);
+  // one note per day: if today's exists, keep what was ticked and do none of the work below
+  const today = C.isoDate(new Date()), name = PREFIX + today;
+  const path = normalizePath((S.inboxFolder ? S.inboxFolder + '/' : '') + name + '.md');
+  if (P.app.vault.getAbstractFileByPath(path)) return { path, total: 0, existing: true };
+  const heat = await P.getHeat(true);
   const proc = C.csv(S.processFolders), proj = C.csv(S.projectFolders);
   const forbidden = (a, b) => proc.length && proj.length && C.inFolders(a, proc) && C.inFolders(b, proj);   // a how-to never links a project
   const linked = (a, b) => !!(RL[a] && RL[a][b]);
@@ -448,10 +474,8 @@ async function makeProposals(P) {
   const max = { add: S.maxAdd, cut: S.maxCut, archive: S.maxArchive };
   for (const k of Object.keys(out)) out[k] = out[k].filter((x) => !rejected[x.id]).sort((x, y) => y.strength - x.strength).slice(0, max[k]);
 
-  const today = C.isoDate(new Date()), name = PREFIX + today, total = out.add.length + out.cut.length + out.archive.length;
+  const total = out.add.length + out.cut.length + out.archive.length;
   await P.ensureFolder(S.inboxFolder);
-  const path = normalizePath((S.inboxFolder ? S.inboxFolder + '/' : '') + name + '.md');
-  if (P.app.vault.getAbstractFileByPath(path)) return { path, total: -1 };          // one per day: keep what was ticked
   const L = (p) => '[' + C.baseName(p) + '](' + P.uri(p) + ')';
   const md = ['---', 'type: proposals', S.summaryProperty + ': "TrueBrain link proposals for ' + today + ': ' + total + ' to review."', 'created: ' + today, '---', '# ' + name, '',
     'Tick what should happen, then run **TrueBrain: Apply ticked proposals**. Unticked = undecided. **Delete a line** = no, never suggest it again.',
@@ -543,6 +567,7 @@ const { makeProposals, applyProposals } = require('./proposals');
 
 const VIEW = 'truebrain-public-panel';
 const DATA = '.truebrain';                     // vault-root dot-folder: Obsidian does not index it; AI tools can read it
+const KEEP_DAYS = 400;                         // heat reads this far back; the usage log is trimmed to it once a day
 const DEFAULTS = {
   inboxFolder: 'Inbox', packFolder: 'Archive', reportFolder: 'TrueBrain', excludeFolders: '',
   summaryProperty: 'summary', requireSummary: true, parentProperty: '',
@@ -688,7 +713,13 @@ class TrueBrainPublic extends Plugin {
     });
   }
 
-  onunload() { if (this.obs) this.obs.disconnect(); document.querySelectorAll('.truebrain-hot,.truebrain-cold').forEach((e) => e.classList.remove('truebrain-hot', 'truebrain-cold')); }
+  onunload() {
+    // pending one-shot timers would otherwise fire after the plugin is gone (an index write, a storm "calm" refresh)
+    for (const k of ['_calm', '_mt', '_ix']) { window.clearTimeout(this[k]); this[k] = null; }
+    this.unloaded = true;
+    if (this.obs) this.obs.disconnect();
+    document.querySelectorAll('.truebrain-hot,.truebrain-cold').forEach((e) => e.classList.remove('truebrain-hot', 'truebrain-cold'));
+  }
   async saveSettings() { await this.saveData(this.settings); }
 
   // ---------------------------------------------------------------- shared helpers
@@ -741,7 +772,7 @@ class TrueBrainPublic extends Plugin {
   }
   async getHeat(force) {
     if (this.heat && !force && Date.now() - this.heatAt < 60000) return this.heat;
-    const since = Date.now() - 400 * C.DAY;
+    const since = Date.now() - KEEP_DAYS * C.DAY;
     const events = C.parseEvents(await this.readData('usage.jsonl'), since);
     const RL = this.app.metadataCache.resolvedLinks, back = new Map(), links = {};
     for (const [src, dsts] of Object.entries(RL)) for (const d of Object.keys(dsts)) back.set(d, (back.get(d) || 0) + 1);
@@ -828,6 +859,8 @@ class TrueBrainPublic extends Plugin {
   // ---------------------------------------------------------------- AI index: one grep-able line per note
   queueIndex() { if (!this.settings.aiIndex || this.storm) return; window.clearTimeout(this._ix); this._ix = window.setTimeout(() => this.writeIndex(false), 60000); }
   async writeIndex(show) {
+    if (this.unloaded) return;
+    if (!this.heat) await this.getHeat();          // otherwise the first index after startup says heat 0 everywhere
     const rows = ['path\tname\ttype\tsummary\ttags\theat'];
     for (const e of this.entries()) rows.push([e.path, e.name, e.type, e.summary, e.tags, e.heat].map((x) => String(x).replace(/[\t\n]/g, ' ')).join('\t'));
     await this.writeData('index.tsv', rows.join('\n') + '\n');
@@ -837,15 +870,23 @@ class TrueBrainPublic extends Plugin {
 
   // ---------------------------------------------------------------- upkeep: daily report, weekly proposals
   async dailyUpkeep() {
-    if (this.storm) return;
+    if (this.storm || this.unloaded) return;
     const today = C.isoDate(new Date());
-    if (this.settings.lastReport !== today) await this.writeReport(false);
+    if (this.settings.lastReport !== today) { await this.compactUsage(); await this.writeReport(false); }
     if (this.settings.weeklyProposals && (!this.settings.lastProposals || Date.now() - Date.parse(this.settings.lastProposals) >= 7 * C.DAY)) await this.runProposals(false);
+  }
+  /* the usage log only grows, and heat re-reads all of it; once a day drop what heat can no longer use
+   * (older than KEEP_DAYS) and any unreadable line. Nothing is rewritten when nothing would change. */
+  async compactUsage() {
+    const text = await this.readData('usage.jsonl'); if (!text) return { dropped: 0 };
+    const r = C.compactEvents(text, Date.now() - KEEP_DAYS * C.DAY);
+    if (r.dropped) await this.writeData('usage.jsonl', r.text);
+    return r;
   }
   async runProposals(show) {
     const r = await makeProposals(this);
     this.settings.lastProposals = C.isoDate(new Date()); await this.saveSettings();
-    if (show && r) { new Notice('TrueBrain: ' + r.total + ' proposals'); this.openPath(r.path); }
+    if (show && r) { new Notice(r.existing ? "TrueBrain: today's proposals are already made; opened them" : 'TrueBrain: ' + r.total + ' proposals'); this.openPath(r.path); }
   }
   async writeReport(show) {
     const S = this.settings, notes = this.notes(), MC = this.app.metadataCache;
@@ -900,7 +941,7 @@ class Settings extends PluginSettingTab {
   display() {
     const c = this.containerEl, S = this.p.settings, save = () => this.p.saveSettings(); c.empty();
     const text = (name, key, desc) => new Setting(c).setName(name).setDesc(desc || '').addText((t) => t.setValue(String(S[key])).onChange(async (v) => { S[key] = v.trim(); await save(); }));
-    const num = (name, key, desc) => new Setting(c).setName(name).setDesc(desc || '').addText((t) => t.setValue(String(S[key])).onChange(async (v) => { const n = parseInt(v, 10); if (n > 0) { S[key] = n; await save(); } }));
+    const num = (name, key, desc, min) => new Setting(c).setName(name).setDesc(desc || '').addText((t) => t.setValue(String(S[key])).onChange(async (v) => { const n = parseInt(v, 10); if (n >= (min == null ? 1 : min)) { S[key] = n; await save(); } }));
     const tog = (name, key, desc, after) => new Setting(c).setName(name).setDesc(desc || '').addToggle((t) => t.setValue(!!S[key]).onChange(async (v) => { S[key] = v; await save(); if (after) after(v); }));
     new Setting(c).setName('Folders').setHeading();
     text('Inbox folder', 'inboxFolder', 'Where captures and the weekly proposals go.');
@@ -920,7 +961,9 @@ class Settings extends PluginSettingTab {
     num('How many hot notes to mark', 'hotTop');
     new Setting(c).setName('Weekly proposals').setHeading();
     tog('Make link proposals once a week', 'weeklyProposals', 'One note in the inbox to tick. Nothing changes without a tick.');
-    num('Max "add link" proposals', 'maxAdd'); num('Max "cut link" proposals', 'maxCut'); num('Max "archive" proposals', 'maxArchive');
+    num('Max "add link" proposals', 'maxAdd', '0 turns this section off.', 0);
+    num('Max "cut link" proposals', 'maxCut', '0 turns this section off.', 0);
+    num('Max "archive" proposals', 'maxArchive', '0 turns this section off.', 0);
     text('Archive sets this property', 'archiveProperty'); text('... to this value', 'archiveValue');
     text('How-to folders (optional)', 'processFolders', 'Comma-separated. Notes here are never proposed links into the project folders below.');
     text('Project folders (optional)', 'projectFolders', 'Comma-separated.');

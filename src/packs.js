@@ -129,9 +129,7 @@ async function unpackFlow(P, packFile) {
   let m; try { m = await readManifest(P, packFile); } catch (e) { return new Notice('TrueBrain: ' + e.message); }
   const V = P.app.vault, man = m.manifest;
   const targets = man.files.map((f) => {
-    let path = f.path;
-    if (V.getAbstractFileByPath(path)) { const dot = path.lastIndexOf('.'); path = path.slice(0, dot) + ' (unpacked)' + path.slice(dot); }
-    return { from: f.path, to: path };
+    return { from: f.path, to: V.getAbstractFileByPath(f.path) ? C.besidePath(f.path) : f.path };
   });
   let found = 0;
   for (const e of man.inbound) { const f = V.getAbstractFileByPath(e.file); if (f instanceof TFile && (await V.cachedRead(f)).includes(e.replacement)) found++; }

@@ -25,7 +25,12 @@ async function harvest(P) {
 
 async function makeProposals(P) {
   const S = P.settings, MC = P.app.metadataCache, RL = MC.resolvedLinks;
-  const rejected = await harvest(P), heat = await P.getHeat(true);
+  const rejected = await harvest(P);
+  // one note per day: if today's exists, keep what was ticked and do none of the work below
+  const today = C.isoDate(new Date()), name = PREFIX + today;
+  const path = normalizePath((S.inboxFolder ? S.inboxFolder + '/' : '') + name + '.md');
+  if (P.app.vault.getAbstractFileByPath(path)) return { path, total: 0, existing: true };
+  const heat = await P.getHeat(true);
   const proc = C.csv(S.processFolders), proj = C.csv(S.projectFolders);
   const forbidden = (a, b) => proc.length && proj.length && C.inFolders(a, proc) && C.inFolders(b, proj);   // a how-to never links a project
   const linked = (a, b) => !!(RL[a] && RL[a][b]);
@@ -74,10 +79,8 @@ async function makeProposals(P) {
   const max = { add: S.maxAdd, cut: S.maxCut, archive: S.maxArchive };
   for (const k of Object.keys(out)) out[k] = out[k].filter((x) => !rejected[x.id]).sort((x, y) => y.strength - x.strength).slice(0, max[k]);
 
-  const today = C.isoDate(new Date()), name = PREFIX + today, total = out.add.length + out.cut.length + out.archive.length;
+  const total = out.add.length + out.cut.length + out.archive.length;
   await P.ensureFolder(S.inboxFolder);
-  const path = normalizePath((S.inboxFolder ? S.inboxFolder + '/' : '') + name + '.md');
-  if (P.app.vault.getAbstractFileByPath(path)) return { path, total: -1 };          // one per day: keep what was ticked
   const L = (p) => '[' + C.baseName(p) + '](' + P.uri(p) + ')';
   const md = ['---', 'type: proposals', S.summaryProperty + ': "TrueBrain link proposals for ' + today + ': ' + total + ' to review."', 'created: ' + today, '---', '# ' + name, '',
     'Tick what should happen, then run **TrueBrain: Apply ticked proposals**. Unticked = undecided. **Delete a line** = no, never suggest it again.',

@@ -23,14 +23,16 @@ function rankNotes(entries, query, opts) {
   opts = opts || {};
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return [];
+  // one pattern per word, built once per query rather than once per note
+  const starts = words.map((w) => new RegExp('(^|[^a-z0-9])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const hits = [];
   for (const e of entries) {
     if (opts.type && e.type !== opts.type) continue;
     const nm = e.name.toLowerCase(), sm = (e.summary || '').toLowerCase(), tg = (e.tags || '').toLowerCase(), pa = e.path.toLowerCase();
     let score = 0, ok = true;
-    for (const w of words) {
-      const re = new RegExp('(^|[^a-z0-9])' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      const s = (re.test(nm) ? 6 : 0) + (sm.includes(w) ? 3 : 0) + (tg.includes(w) ? 2 : 0) + (pa.includes(w) ? 1 : 0);
+    for (let wi = 0; wi < words.length; wi++) {
+      const w = words[wi];
+      const s = (starts[wi].test(nm) ? 6 : 0) + (sm.includes(w) ? 3 : 0) + (tg.includes(w) ? 2 : 0) + (pa.includes(w) ? 1 : 0);
       if (!s) { ok = false; break; }
       score += s;
     }
@@ -84,9 +86,9 @@ function computeHeat(events, notes, links, now, opts) {
     out.push({ note: n.path, score, reads30: r, edited30: edited, back: n.back || 0, out: n.out || 0, idle, cold });
   }
   out.sort((a, b) => b.score - a.score || a.note.localeCompare(b.note));
-  const never = [];
+  const never = [], byPath = new Map(notes.map((n) => [n.path, n]));     // a lookup, not a scan per linking note
   for (const [src, dsts] of Object.entries(links || {})) {
-    const meta = notes.find((n) => n.path === src);
+    const meta = byPath.get(src);
     if (!meta || meta.hub || (reads.get(src) || 0) < opts.readsForNever) continue;
     for (const d of dsts) if (!follows.has(src + '\u0000' + d)) never.push({ a: src, b: d, reads: reads.get(src) });
   }
@@ -106,6 +108,27 @@ function parseEvents(text, sinceMs) {
     try { const e = JSON.parse(line); if (e && e.note && e.t && (!sinceMs || Date.parse(e.t) >= sinceMs)) out.push(e); } catch (err) { /* skip bad line */ }
   }
   return out;
+}
+
+/* the usage log keeps only what heat can still read: events since sinceMs, valid lines only.
+ * -> {text, kept, dropped}; dropped 0 means the log is already compact and need not be rewritten */
+function compactEvents(text, sinceMs) {
+  const keep = []; let dropped = 0;
+  for (const line of String(text || '').split('\n')) {
+    if (!line.trim()) continue;
+    let e = null; try { e = JSON.parse(line); } catch (err) { /* a bad line is dropped */ }
+    const t = e && e.note && e.t ? Date.parse(e.t) : NaN;
+    if (isFinite(t) && t >= sinceMs) keep.push(line); else dropped++;
+  }
+  return { text: keep.length ? keep.join('\n') + '\n' : '', kept: keep.length, dropped };
+}
+
+/* where a restored file goes when its own path is taken: "a/b.md" -> "a/b (unpacked).md",
+ * "a/Makefile" -> "a/Makefile (unpacked)", "a.b/c" -> "a.b/c (unpacked)" (a dot in a folder is not an extension) */
+function besidePath(path, tag) {
+  tag = tag || ' (unpacked)';
+  const slash = path.lastIndexOf('/'), dot = path.lastIndexOf('.');
+  return dot > slash + 1 ? path.slice(0, dot) + tag + path.slice(dot) : path + tag;
 }
 
 // ---------------------------------------------------------------- text helpers for proposals
@@ -185,6 +208,6 @@ const sameBytes = (a, b) => a.length === b.length && a.every((x, i) => x === b[i
 
 module.exports = {
   DAY, baseName, folderOf, csv, inFolders, isoDate, isoStamp, hash, safeName, fmString,
-  rankNotes, computeHeat, parseEvents, blankPlain, findMention, parseProposalLines, PROPOSAL_LINE,
+  rankNotes, computeHeat, parseEvents, compactEvents, besidePath, blankPlain, findMention, parseProposalLines, PROPOSAL_LINE,
   defang, buildPackText, parsePackText, gzip, gunzip, sameBytes, ZW,
 };

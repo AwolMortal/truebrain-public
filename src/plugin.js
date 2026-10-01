@@ -8,6 +8,7 @@ const { makeProposals, applyProposals } = require('./proposals');
 
 const VIEW = 'truebrain-public-panel';
 const DATA = '.truebrain';                     // vault-root dot-folder: Obsidian does not index it; AI tools can read it
+const KEEP_DAYS = 400;                         // heat reads this far back; the usage log is trimmed to it once a day
 const DEFAULTS = {
   inboxFolder: 'Inbox', packFolder: 'Archive', reportFolder: 'TrueBrain', excludeFolders: '',
   summaryProperty: 'summary', requireSummary: true, parentProperty: '',
@@ -153,7 +154,13 @@ class TrueBrainPublic extends Plugin {
     });
   }
 
-  onunload() { if (this.obs) this.obs.disconnect(); document.querySelectorAll('.truebrain-hot,.truebrain-cold').forEach((e) => e.classList.remove('truebrain-hot', 'truebrain-cold')); }
+  onunload() {
+    // pending one-shot timers would otherwise fire after the plugin is gone (an index write, a storm "calm" refresh)
+    for (const k of ['_calm', '_mt', '_ix']) { window.clearTimeout(this[k]); this[k] = null; }
+    this.unloaded = true;
+    if (this.obs) this.obs.disconnect();
+    document.querySelectorAll('.truebrain-hot,.truebrain-cold').forEach((e) => e.classList.remove('truebrain-hot', 'truebrain-cold'));
+  }
   async saveSettings() { await this.saveData(this.settings); }
 
   // ---------------------------------------------------------------- shared helpers
@@ -206,7 +213,7 @@ class TrueBrainPublic extends Plugin {
   }
   async getHeat(force) {
     if (this.heat && !force && Date.now() - this.heatAt < 60000) return this.heat;
-    const since = Date.now() - 400 * C.DAY;
+    const since = Date.now() - KEEP_DAYS * C.DAY;
     const events = C.parseEvents(await this.readData('usage.jsonl'), since);
     const RL = this.app.metadataCache.resolvedLinks, back = new Map(), links = {};
     for (const [src, dsts] of Object.entries(RL)) for (const d of Object.keys(dsts)) back.set(d, (back.get(d) || 0) + 1);
@@ -293,6 +300,8 @@ class TrueBrainPublic extends Plugin {
   // ---------------------------------------------------------------- AI index: one grep-able line per note
   queueIndex() { if (!this.settings.aiIndex || this.storm) return; window.clearTimeout(this._ix); this._ix = window.setTimeout(() => this.writeIndex(false), 60000); }
   async writeIndex(show) {
+    if (this.unloaded) return;
+    if (!this.heat) await this.getHeat();          // otherwise the first index after startup says heat 0 everywhere
     const rows = ['path\tname\ttype\tsummary\ttags\theat'];
     for (const e of this.entries()) rows.push([e.path, e.name, e.type, e.summary, e.tags, e.heat].map((x) => String(x).replace(/[\t\n]/g, ' ')).join('\t'));
     await this.writeData('index.tsv', rows.join('\n') + '\n');
@@ -302,15 +311,23 @@ class TrueBrainPublic extends Plugin {
 
   // ---------------------------------------------------------------- upkeep: daily report, weekly proposals
   async dailyUpkeep() {
-    if (this.storm) return;
+    if (this.storm || this.unloaded) return;
     const today = C.isoDate(new Date());
-    if (this.settings.lastReport !== today) await this.writeReport(false);
+    if (this.settings.lastReport !== today) { await this.compactUsage(); await this.writeReport(false); }
     if (this.settings.weeklyProposals && (!this.settings.lastProposals || Date.now() - Date.parse(this.settings.lastProposals) >= 7 * C.DAY)) await this.runProposals(false);
+  }
+  /* the usage log only grows, and heat re-reads all of it; once a day drop what heat can no longer use
+   * (older than KEEP_DAYS) and any unreadable line. Nothing is rewritten when nothing would change. */
+  async compactUsage() {
+    const text = await this.readData('usage.jsonl'); if (!text) return { dropped: 0 };
+    const r = C.compactEvents(text, Date.now() - KEEP_DAYS * C.DAY);
+    if (r.dropped) await this.writeData('usage.jsonl', r.text);
+    return r;
   }
   async runProposals(show) {
     const r = await makeProposals(this);
     this.settings.lastProposals = C.isoDate(new Date()); await this.saveSettings();
-    if (show && r) { new Notice('TrueBrain: ' + r.total + ' proposals'); this.openPath(r.path); }
+    if (show && r) { new Notice(r.existing ? "TrueBrain: today's proposals are already made; opened them" : 'TrueBrain: ' + r.total + ' proposals'); this.openPath(r.path); }
   }
   async writeReport(show) {
     const S = this.settings, notes = this.notes(), MC = this.app.metadataCache;
@@ -365,7 +382,7 @@ class Settings extends PluginSettingTab {
   display() {
     const c = this.containerEl, S = this.p.settings, save = () => this.p.saveSettings(); c.empty();
     const text = (name, key, desc) => new Setting(c).setName(name).setDesc(desc || '').addText((t) => t.setValue(String(S[key])).onChange(async (v) => { S[key] = v.trim(); await save(); }));
-    const num = (name, key, desc) => new Setting(c).setName(name).setDesc(desc || '').addText((t) => t.setValue(String(S[key])).onChange(async (v) => { const n = parseInt(v, 10); if (n > 0) { S[key] = n; await save(); } }));
+    const num = (name, key, desc, min) => new Setting(c).setName(name).setDesc(desc || '').addText((t) => t.setValue(String(S[key])).onChange(async (v) => { const n = parseInt(v, 10); if (n >= (min == null ? 1 : min)) { S[key] = n; await save(); } }));
     const tog = (name, key, desc, after) => new Setting(c).setName(name).setDesc(desc || '').addToggle((t) => t.setValue(!!S[key]).onChange(async (v) => { S[key] = v; await save(); if (after) after(v); }));
     new Setting(c).setName('Folders').setHeading();
     text('Inbox folder', 'inboxFolder', 'Where captures and the weekly proposals go.');
@@ -385,7 +402,9 @@ class Settings extends PluginSettingTab {
     num('How many hot notes to mark', 'hotTop');
     new Setting(c).setName('Weekly proposals').setHeading();
     tog('Make link proposals once a week', 'weeklyProposals', 'One note in the inbox to tick. Nothing changes without a tick.');
-    num('Max "add link" proposals', 'maxAdd'); num('Max "cut link" proposals', 'maxCut'); num('Max "archive" proposals', 'maxArchive');
+    num('Max "add link" proposals', 'maxAdd', '0 turns this section off.', 0);
+    num('Max "cut link" proposals', 'maxCut', '0 turns this section off.', 0);
+    num('Max "archive" proposals', 'maxArchive', '0 turns this section off.', 0);
     text('Archive sets this property', 'archiveProperty'); text('... to this value', 'archiveValue');
     text('How-to folders (optional)', 'processFolders', 'Comma-separated. Notes here are never proposed links into the project folders below.');
     text('Project folders (optional)', 'projectFolders', 'Comma-separated.');
