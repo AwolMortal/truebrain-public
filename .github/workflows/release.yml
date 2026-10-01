@@ -1,29 +1,42 @@
-# Push a tag like 0.1.1 (no "v": Obsidian and BRAT read the tag as the version) and this publishes the
-# GitHub release with the three files a plugin install needs. It refuses unless the tag, manifest.json
-# and versions.json agree, main.js matches the sources, and the tests pass.
+# Publishes a GitHub release with the three files a plugin install needs (main.js, manifest.json,
+# styles.css). Two ways in:
+#   - push a version tag with no "v", like 0.1.2 (Obsidian and BRAT read the tag as the version);
+#   - or Actions > Release > Run workflow, naming a tag that already exists (for a tag whose push did
+#     not start a run).
+# It refuses unless the tag is a plain version, the tag, manifest.json and versions.json agree,
+# main.js matches the sources, the tests pass and no release exists for the tag yet.
 name: Release
 on:
   push:
     tags:
-      - "[0-9]+.[0-9]+.[0-9]+"
+      - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The version tag to release, e.g. 0.1.1"
+        required: true
 permissions:
   contents: write
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: The tag, manifest.json and versions.json agree
+      - name: The tag is a plain version, and manifest.json and versions.json agree
         run: |
-          TAG="${GITHUB_REF_NAME}"
           node -e '
             const tag = process.argv[1];
+            if (!/^[0-9]+[.][0-9]+[.][0-9]+$/.test(tag)) { console.log("not a version tag: " + tag); process.exit(1); }
             const m = require("./manifest.json"), v = require("./versions.json");
             if (m.version !== tag) { console.log("manifest.json says " + m.version + ", the tag is " + tag); process.exit(1); }
-            if (v[tag] !== m.minAppVersion) { console.log("versions.json needs \"" + tag + "\": \"" + m.minAppVersion + "\""); process.exit(1); }
+            if (v[tag] !== m.minAppVersion) { console.log("versions.json needs " + tag + ": " + m.minAppVersion); process.exit(1); }
             console.log("version " + tag + ", minAppVersion " + m.minAppVersion);
           ' "$TAG"
       - name: main.js matches the sources
@@ -34,5 +47,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" main.js manifest.json styles.css \
-            --title "TrueBrain Public ${GITHUB_REF_NAME}" --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "a release for $TAG already exists"; exit 1; fi
+          gh release create "$TAG" main.js manifest.json styles.css \
+            --title "TrueBrain Public $TAG" --notes-file "docs/releases/$TAG.md" --verify-tag
