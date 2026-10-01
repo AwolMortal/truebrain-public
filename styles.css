@@ -1,0 +1,18 @@
+/* TrueBrain Public. Colours follow the theme; the one accent is the flame orange. */
+.nav-file-title.truebrain-hot .nav-file-title-content::after { content: " \25CF"; color: #f76b15; font-size: 0.8em; }
+.nav-file-title.truebrain-cold .nav-file-title-content { opacity: 0.55; font-style: italic; }
+.truebrain-status { cursor: pointer; }
+.truebrain-status.truebrain-warn { color: var(--text-warning); }
+.truebrain-panel { padding: 10px 14px; }
+.truebrain-panel h4 { margin: 14px 0 4px; color: #f76b15; font-size: 0.95em; }
+.truebrain-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; }
+.truebrain-row:hover { color: var(--text-accent); }
+.truebrain-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.truebrain-num, .truebrain-muted { color: var(--text-muted); flex: none; font-size: 0.85em; }
+.truebrain-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.truebrain-empty { color: var(--text-faint); font-style: italic; }
+.truebrain-small { font-size: 0.75em; padding: 0 6px; height: 1.6em; flex: none; }
+.truebrain-output { white-space: pre-wrap; font-family: var(--font-monospace); font-size: 0.8em; max-height: 55vh; overflow: auto; background: var(--background-secondary); padding: 8px; border-radius: 6px; }
+.truebrain-find-name { font-weight: 600; }
+.truebrain-find-summary { color: var(--text-muted); font-size: 0.85em; }
+.truebrain-find-path { color: var(--text-faint); font-size: 0.75em; }

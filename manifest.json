@@ -1,0 +1,10 @@
+{
+  "id": "truebrain-public",
+  "name": "TrueBrain Public",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Find notes by summary, see which notes and links are hot or cold, get weekly link proposals to tick, pack old projects into one note and unpack them exactly, and keep an index AI assistants can read.",
+  "author": "Aaron Gates",
+  "authorUrl": "https://github.com/AwolMortal",
+  "isDesktopOnly": false
+}
