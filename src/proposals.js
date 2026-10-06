@@ -6,7 +6,7 @@ const C = require('./core');
 const PREFIX = 'TrueBrain Proposals ';
 const fmEndOf = (t) => { if (!t.startsWith('---')) return 0; const e = t.indexOf('\n---', 3); return e < 0 ? 0 : e + 4; };
 
-async function loadJson(P, name, dflt) { try { const t = await P.readData('proposals/' + name); return t ? JSON.parse(t) : dflt; } catch (e) { return dflt; } }
+async function loadJson(P, name, dflt) { try { const t = await P.readData('proposals/' + name); return t ? JSON.parse(t) : dflt; } catch { return dflt; } }
 async function saveJson(P, name, obj) { await P.ensureData(); const a = P.app.vault.adapter; if (!(await a.exists('.truebrain/proposals'))) await a.mkdir('.truebrain/proposals'); await P.writeData('proposals/' + name, JSON.stringify(obj, null, 1)); }
 
 function proposalNotes(P) { return P.app.vault.getMarkdownFiles().filter((f) => f.basename.startsWith(PREFIX)).sort((a, b) => a.basename.localeCompare(b.basename)); }

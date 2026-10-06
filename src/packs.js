@@ -160,7 +160,7 @@ async function usedBy(P, file) {
   const out = [];
   for (const pf of listPacks(P)) {
     try { const { manifest } = await readManifest(P, pf); for (const o of manifest.outgoing) if (o.target === file.path) out.push(manifest.pack + ': ' + o.from); }
-    catch (e) { /* not a readable pack */ }
+    catch { /* not a readable pack */ }
   }
   new Notice(out.length ? 'Used by packed notes:\n' + out.slice(0, 15).join('\n') : 'TrueBrain: no packed note links to ' + file.basename, 8000);
 }

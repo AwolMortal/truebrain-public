@@ -1,6 +1,6 @@
 {
   "name": "truebrain-public",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TrueBrain Public: an Obsidian plugin that keeps a second brain in shape.",
   "private": true,
   "license": "MIT",

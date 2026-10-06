@@ -190,6 +190,14 @@ const lastModal = () => M.Modal.opened[M.Modal.opened.length - 1];
       ok(!app.vault.adapter.data.has('.truebrain/index.tsv'), 'unload: no index is written after unload');
     } finally { global.window.setTimeout = realSet; global.window.clearTimeout = realClear; }
   }
+  // the 15-second startup-upkeep timer is also cleared on unload (found by the Obsidian review lint pass)
+  {
+    const { p } = await newPlugin({ 'A.md': 'x' });
+    const realClear = global.window.clearTimeout, cleared = new Set();
+    global.window.clearTimeout = (id) => { cleared.add(id); realClear(id); };
+    try { p._up = 4242; p.onunload(); ok(cleared.has(4242), 'unload: the startup upkeep timer is cleared'); }
+    finally { global.window.clearTimeout = realClear; }
+  }
   // the usage log is trimmed to what heat reads, and left alone when already trim
   {
     const old = C.isoStamp(new Date(Date.now() - 500 * C.DAY)), recent = C.isoStamp(new Date(Date.now() - C.DAY));

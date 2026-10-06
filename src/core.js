@@ -105,7 +105,7 @@ function parseEvents(text, sinceMs) {
   const out = [];
   for (const line of String(text || '').split('\n')) {
     if (!line.trim()) continue;
-    try { const e = JSON.parse(line); if (e && e.note && e.t && (!sinceMs || Date.parse(e.t) >= sinceMs)) out.push(e); } catch (err) { /* skip bad line */ }
+    try { const e = JSON.parse(line); if (e && e.note && e.t && (!sinceMs || Date.parse(e.t) >= sinceMs)) out.push(e); } catch { /* skip bad line */ }
   }
   return out;
 }
@@ -116,7 +116,7 @@ function compactEvents(text, sinceMs) {
   const keep = []; let dropped = 0;
   for (const line of String(text || '').split('\n')) {
     if (!line.trim()) continue;
-    let e = null; try { e = JSON.parse(line); } catch (err) { /* a bad line is dropped */ }
+    let e = null; try { e = JSON.parse(line); } catch { /* a bad line is dropped */ }
     const t = e && e.note && e.t ? Date.parse(e.t) : NaN;
     if (isFinite(t) && t >= sinceMs) keep.push(line); else dropped++;
   }

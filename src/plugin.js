@@ -1,7 +1,7 @@
 'use strict';
 /* TrueBrain Public: the Obsidian side. Pure logic lives in ./core (tested with plain Node). */
 const obsidian = require('obsidian');
-const { Plugin, ItemView, Modal, Notice, PluginSettingTab, Setting, SuggestModal, TFile, TFolder, normalizePath } = obsidian;
+const { Plugin, ItemView, Modal, Notice, PluginSettingTab, Setting, SuggestModal, TFile, normalizePath } = obsidian;
 const C = require('./core');
 const { packFlow, unpackFlow, usedBy, listPacks } = require('./packs');
 const { makeProposals, applyProposals } = require('./proposals');
@@ -39,19 +39,6 @@ class ChoiceModal extends SuggestModal {
   getSuggestions(q) { return this.items.filter((i) => this.label(i).toLowerCase().includes(q.toLowerCase())); }
   renderSuggestion(i, el) { el.setText(this.label(i)); }
   onChooseSuggestion(i) { this.onChoose(i); }
-}
-
-class ReportModal extends Modal {
-  constructor(app, title, text, actions) { super(app); this.t = title; this.text = text; this.actions = actions || []; }
-  onOpen() {
-    this.titleEl.setText(this.t);
-    this.contentEl.createEl('div', { cls: 'truebrain-output', text: this.text || '(nothing)' });
-    if (this.actions.length) {
-      const row = this.contentEl.createDiv({ cls: 'truebrain-buttons' });
-      for (const a of this.actions) { const b = row.createEl('button', { text: a.label, cls: a.warn ? 'mod-warning' : 'mod-cta' }); b.onclick = () => { this.close(); a.run(); }; }
-    }
-  }
-  onClose() { this.contentEl.empty(); }
 }
 
 class FindModal extends SuggestModal {
@@ -149,14 +136,14 @@ class TrueBrainPublic extends Plugin {
       await this.ensureData();
       this.updateStatus(); this.scheduleMarks(); this.queueIndex();
       // upkeep that would be a scheduled job elsewhere: once a day / once a week, when Obsidian is open
-      window.setTimeout(() => this.dailyUpkeep(), 15000);
+      this._up = window.setTimeout(() => this.dailyUpkeep(), 15000);
       this.registerInterval(window.setInterval(() => this.dailyUpkeep(), 3600000));
     });
   }
 
   onunload() {
     // pending one-shot timers would otherwise fire after the plugin is gone (an index write, a storm "calm" refresh)
-    for (const k of ['_calm', '_mt', '_ix']) { window.clearTimeout(this[k]); this[k] = null; }
+    for (const k of ['_calm', '_mt', '_ix', '_up']) { window.clearTimeout(this[k]); this[k] = null; }
     this.unloaded = true;
     if (this.obs) this.obs.disconnect();
     document.querySelectorAll('.truebrain-hot,.truebrain-cold').forEach((e) => e.classList.remove('truebrain-hot', 'truebrain-cold'));
@@ -216,7 +203,7 @@ class TrueBrainPublic extends Plugin {
     const since = Date.now() - KEEP_DAYS * C.DAY;
     const events = C.parseEvents(await this.readData('usage.jsonl'), since);
     const RL = this.app.metadataCache.resolvedLinks, back = new Map(), links = {};
-    for (const [src, dsts] of Object.entries(RL)) for (const d of Object.keys(dsts)) back.set(d, (back.get(d) || 0) + 1);
+    for (const dsts of Object.values(RL)) for (const d of Object.keys(dsts)) back.set(d, (back.get(d) || 0) + 1);
     const keep = C.csv(this.settings.keepStatuses).map((s) => s.toLowerCase());
     const notes = this.notes().map((f) => {
       const c = this.app.metadataCache.getFileCache(f) || {};
